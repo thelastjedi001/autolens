@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AutoLens — Trusted used cars, honest advice</title>
+
+<!--
+  AutoLens — single-file prototype
+  --------------------------------
+  Structure:
+    <style>   design tokens + all component styles
+    <script>  organized into modules:
+                DATA        the 15 trusted cars (edit prices/ratings/copy here)
+                money       currency + loan math
+                reveal      scroll-in animation (IntersectionObserver)
+                header      hides the nav once you scroll past the hero
+                catalog     renders the car grid
+                calculator  Feature A: pick a car, estimate a monthly payment
+                matcher     Feature B: budget + style -> matching cars
+                flow        the hero discovery / interview state machine
+
+  Swapping in real car photos:
+    Each card renders a placeholder visual (.car-visual). To use real images,
+    give each car an `image` URL in the DATA array and the card will use it.
+    Deterministic renders: https://cdn.imagin.studio/getimage?customer=YOURKEY&make=...&modelFamily=...
+-->
+
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@700,800&f[]=satoshi@400,500,700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --bg: #FBFBFA;
+    --surface: #FFFFFF;
+    --surface-2: #F4F4F1;
+    --border: #E6E6E1;
+    --border-strong: #D7D7D0;
+    --text: #1A1A18;
+    --text-muted: #6B6B64;
+    --text-faint: #9A9A92;
+    --accent: #059669;
+    --accent-hover: #047857;
+    --accent-soft: #ECFDF5;
+    --radius: 14px;
+    --radius-sm: 10px;
+    --maxw: 1200px;
+    --font-display: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif;
+    --font-sans: 'Satoshi', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', monospace;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection { background: var(--accent-soft); }
+
+  h1, h2, h3 { font-family: var(--font-display); letter-spacing: -0.02em; line-height: 1.02; }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .mono { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-faint); }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    font-family: var(--font-sans);
+    font-size: 15px;
+    font-weight: 500;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: 11px 20px;
+    cursor: pointer;
+    transition: background 200ms var(--ease), transform 120ms var(--ease), border-color 200ms var(--ease), color 200ms var(--ease);
+    background: var(--surface);
+  }
+  .btn:active { transform: scale(0.98); }
+  .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 4px var(--accent); }
+
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+
+  .btn-outline { border-color: var(--border-strong); color: var(--text); }
+  .btn-outline:hover { border-color: var(--text); }
+
+  .btn-ghost { background: transparent; color: var(--text-muted); border-color: var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--border-strong); }
+
+  /* ---------- Header ---------- */
+  header {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 50;
+    background: rgba(251, 251, 250, 0.82);
+    backdrop-filter: saturate(150%) blur(10px);
+    border-bottom: 1px solid var(--border);
+    transition: transform 400ms var(--ease), opacity 300ms var(--ease);
+  }
+  header.tucked { transform: translateY(-100%); opacity: 0; pointer-events: none; }
+
+  .nav {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 64px;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-family: var(--font-display); font-weight: 800; font-size: 19px; letter-spacing: -0.03em; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+  .nav-links { display: flex; gap: 28px; }
+  .nav-links a { color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 500; transition: color 160ms var(--ease); }
+  .nav-links a:hover { color: var(--text); }
+  @media (max-width: 700px) { .nav-links { display: none; } }
+
+  /* ---------- Hero ---------- */
+  .hero { padding: 132px 0 72px; }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 56px;
+    align-items: center;
+  }
+  .hero h1 { font-size: clamp(42px, 6vw, 72px); font-weight: 800; }
+  .hero .lede { margin-top: 20px; font-size: 18px; color: var(--text-muted); max-width: 46ch; }
+  .hero .eyebrow { margin-bottom: 22px; }
+
+  /* Panel (question / interview) */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 30px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 12px 34px -18px rgba(0,0,0,0.14);
+    min-height: 320px;
+    display: flex; flex-direction: column;
+  }
+  .panel .progress { display: flex; gap: 6px; margin-bottom: 22px; }
+  .panel .progress i { height: 3px; flex: 1; border-radius: 3px; background: var(--border); transition: background 300ms var(--ease); }
+  .panel .progress i.on { background: var(--accent); }
+
+  .screen { display: none; flex: 1; flex-direction: column; }
+  .screen.active { display: flex; animation: fade 420ms var(--ease); }
+  @keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  .screen .q { font-family: var(--font-display); font-weight: 700; font-size: 24px; letter-spacing: -0.02em; }
+  .screen .sub { color: var(--text-muted); font-size: 15px; margin-top: 10px; }
+  .screen .choices { display: flex; gap: 12px; margin-top: 26px; flex-wrap: wrap; }
+  .screen .choices .btn { flex: 1; min-width: 120px; }
+  .panel .foot { margin-top: auto; padding-top: 22px; display: flex; justify-content: space-between; align-items: center; }
+  .link-back { background: none; border: none; color: var(--text-faint); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; padding: 4px 0; }
+  .link-back:hover { color: var(--text-muted); }
+  .link-back[hidden] { visibility: hidden; }
+
+  /* form bits */
+  .field { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
+  .field label { font-size: 14px; font-weight: 500; }
+  .field .hint { font-size: 13px; color: var(--text-faint); }
+  .input {
+    font-family: var(--font-sans); font-size: 15px;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    padding: 12px 14px; background: var(--surface); color: var(--text); width: 100%;
+    transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+  }
+  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .input-money { position: relative; }
+  .input-money span { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-faint); font-size: 15px; }
+  .input-money input { padding-left: 30px; }
+
+  .toggle-group { display: grid; gap: 10px; margin-top: 8px; }
+  .toggle {
+    text-align: left; border: 1px solid var(--border-strong); background: var(--surface);
+    border-radius: var(--radius-sm); padding: 14px 16px; cursor: pointer;
+    display: flex; align-items: center; gap: 12px;
+    transition: border-color 160ms var(--ease), background 160ms var(--ease);
+    font-family: var(--font-sans); font-size: 15px; color: var(--text);
+  }
+  .toggle:hover { border-color: var(--text-muted); }
+  .toggle .tick { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--border-strong); flex-shrink: 0; transition: all 160ms var(--ease); }
+  .toggle.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .toggle.sel .tick { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--accent-soft); }
+  .toggle .t-title { font-weight: 500; }
+  .toggle .t-desc { color: var(--text-muted); font-size: 13px; display: block; margin-top: 2px; }
+
+  .note {
+    background: var(--surface-2); border-radius: var(--radius-sm);
+    padding: 16px 18px; font-size: 14px; color: var(--text-muted); margin-top: 8px;
+  }
+  .note b { color: var(--text); font-weight: 600; }
+
+  /* mini matches inside panel */
+  .mini-match { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .mini-match:last-child { border-bottom: none; }
+  .mini-match .mm-name { font-weight: 600; font-size: 15px; }
+  .mini-match .mm-years { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+  .mini-match .mm-pay { font-family: var(--font-mono); font-size: 14px; color: var(--accent); font-weight: 500; }
+
+  /* ---------- Section headers ---------- */
+  .section { padding: 84px 0; }
+  .section-head { max-width: 620px; margin-bottom: 44px; }
+  .section-head h2 { font-size: clamp(30px, 4vw, 44px); font-weight: 800; }
+  .section-head p { margin-top: 14px; color: var(--text-muted); font-size: 17px; max-width: 58ch; }
+
+  /* ---------- Catalog ---------- */
+  .catalog { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; display: flex; flex-direction: column;
+    transition: transform 220ms var(--ease), box-shadow 220ms var(--ease), border-color 220ms var(--ease);
+  }
+  .card:hover { transform: translateY(-3px); box-shadow: 0 2px 8px rgba(0,0,0,0.04), 0 18px 40px -24px rgba(0,0,0,0.22); border-color: var(--border-strong); }
+
+  .card.matched { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+  .car-visual {
+    background: var(--surface-2);
+    aspect-ratio: 16 / 10;
+    display: flex; align-items: center; justify-content: center;
+    position: relative; border-bottom: 1px solid var(--border);
+  }
+  .car-visual svg { width: 58%; height: auto; opacity: 0.42; color: var(--text-muted); }
+  .car-visual img { width: 100%; height: 100%; object-fit: cover; }
+  .car-visual .badge {
+    position: absolute; top: 12px; left: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 10px;
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted);
+  }
+  .car-visual .years {
+    position: absolute; bottom: 12px; right: 12px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+  }
+
+  .card-body { padding: 20px; display: flex; flex-direction: column; flex: 1; }
+  .card h3 { font-size: 20px; font-weight: 700; }
+  .card .about { color: var(--text-muted); font-size: 14px; margin-top: 8px; line-height: 1.55; flex: 1; }
+  .card .review { font-size: 14px; font-style: italic; color: var(--text); margin-top: 14px; padding-left: 12px; border-left: 1px solid var(--accent); }
+
+  .ratings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; margin-top: 18px; }
+  .rating { display: flex; flex-direction: column; gap: 5px; }
+  .rating .r-top { display: flex; justify-content: space-between; align-items: baseline; }
+  .rating .r-label { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text-faint); }
+  .rating .r-val { font-family: var(--font-mono); font-size: 12px; font-weight: 500; color: var(--text); }
+  .bar { height: 3px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+
+  .card .price { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .card .price .p-num { font-family: var(--font-display); font-weight: 700; font-size: 19px; }
+  .card .price .p-cap { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-faint); }
+
+  /* featured card spans two columns, horizontal on desktop */
+  .card.featured { grid-column: span 2; }
+  .card.featured .card-inner { display: grid; grid-template-columns: 1fr 1fr; }
+  .card.featured .car-visual { aspect-ratio: auto; height: 100%; border-bottom: none; border-right: 1px solid var(--border); }
+  @media (max-width: 900px) { .card.featured { grid-column: span 2; } .card.featured .card-inner { grid-template-columns: 1fr; } .card.featured .car-visual { aspect-ratio: 16/10; border-right: none; border-bottom: 1px solid var(--border); } }
+
+  /* ---------- Finance section ---------- */
+  .finance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  .fin-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; }
+  .fin-card h3 { font-size: 22px; font-weight: 700; }
+  .fin-card > p { color: var(--text-muted); font-size: 15px; margin-top: 8px; }
+
+  select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236B6B64' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 38px; }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  .result {
+    margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--border);
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+  }
+  .result .big { font-family: var(--font-display); font-weight: 800; font-size: 40px; color: var(--accent); letter-spacing: -0.03em; line-height: 1; }
+  .result .big small { font-size: 15px; color: var(--text-faint); font-weight: 500; font-family: var(--font-mono); }
+  .result .side { text-align: right; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); line-height: 1.8; }
+  .result .side b { color: var(--text); }
+
+  .matches-out { margin-top: 22px; display: flex; flex-direction: column; }
+  .empty { background: var(--surface-2); border-radius: var(--radius-sm); padding: 22px; text-align: center; color: var(--text-muted); font-size: 14px; }
+
+  /* ---------- Footer ---------- */
+  footer { border-top: 1px solid var(--border); padding: 40px 0; margin-top: 40px; }
+  .foot-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
+  footer .mono { color: var(--text-faint); }
+
+  /* ---------- Reveal ---------- */
+  .reveal { opacity: 0; transform: translateY(12px); transition: opacity 600ms var(--ease), transform 600ms var(--ease); }
+  .reveal.in { opacity: 1; transform: translateY(0); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+    .reveal { opacity: 1; transform: none; }
+    html { scroll-behavior: auto; }
+  }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 900px) {
+    .catalog { grid-template-columns: repeat(2, 1fr); }
+    .finance-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 760px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 36px; }
+    .hero { padding: 104px 0 48px; }
+    .catalog { grid-template-columns: 1fr; }
+    .card.featured { grid-column: span 1; }
+    .section { padding: 60px 0; }
+    .wrap { padding: 0 18px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ HEADER ============ -->
+<header id="site-header">
+  <div class="wrap nav">
+    <div class="brand"><span class="dot"></span>AutoLens</div>
+    <nav class="nav-links">
+      <a href="#catalog">Trusted cars</a>
+      <a href="#finance">Finance</a>
+      <a href="#" onclick="document.getElementById('start-over').click(); return false;">Start over</a>
+    </nav>
+    <button class="btn btn-primary" onclick="document.getElementById('catalog').scrollIntoView()">Browse cars</button>
+  </div>
+</header>
+
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow mono">Used cars, chosen for reliability</div>
+      <h1>Buy a car that keeps its promises.</h1>
+      <p class="lede">Fifteen used cars picked for the same reasons in Lagos and Los Angeles: they last, parts are everywhere, and any mechanic can fix them.</p>
+    </div>
+
+    <div class="panel" id="panel" aria-live="polite">
+      <div class="progress" id="progress">
+        <i class="on"></i><i></i><i></i>
+      </div>
+
+      <!-- Screen: intro -->
+      <div class="screen active" data-screen="intro">
+        <div class="q">Here for recommendations from our most reliable list?</div>
+        <div class="sub">Skip straight to the cars we trust, or answer a few questions and we will point you somewhere.</div>
+        <div class="choices">
+          <button class="btn btn-primary" data-act="intro-yes">Yes, show the list</button>
+          <button class="btn btn-outline" data-act="intro-no">No, ask me a few things</button>
+        </div>
+        <div class="foot"><button class="link-back" hidden></button><span class="mono">Step 1</span></div>
+      </div>
+
+      <!-- Screen A: mechanics -->
+      <div class="screen" data-screen="mechanics">
+        <div class="q">Do you need general mechanics advice?</div>
+        <div class="sub">A symptom you want explained before you spend money at a workshop.</div>
+        <div class="choices">
+          <button class="btn btn-primary" data-act="mech-yes">Yes</button>
+          <button class="btn btn-outline" data-act="mech-no">No</button>
+        </div>
+        <div class="foot"><button class="link-back" data-back="intro">Back</button><span class="mono">Step 2</span></div>
+      </div>
+
+      <!-- Screen A-result: mechanics advice -->
+      <div class="screen" data-screen="mech-advice">
+        <div class="q">Tell us what the car is doing.</div>
+        <div class="field">
+          <label for="mech-car">Car and symptom</label>
+          <textarea class="input" id="mech-car" rows="3" placeholder="2011 VW Jetta, tach needle jumps on the highway, will not go past 80, no check engine light"></textarea>
+        </div>
+        <div class="note" id="mech-note" style="display:none;"></div>
+        <div class="choices">
+          <button class="btn btn-primary" data-act="mech-submit">Get advice</button>
+          <button class="btn btn-ghost" data-act="goto-catalog">Browse cars instead</button>
+        </div>
+        <div class="foot"><button class="link-back" data-back="mechanics">Back</button><span class="mono">Advisor</span></div>
+      </div>
+
+      <!-- Screen B: new car -->
+      <div class="screen" data-screen="newcar">
+        <div class="q">Are you looking to buy a new car?</div>
+        <div class="sub">Brand new, off the showroom floor.</div>
+        <div class="choices">
+          <button class="btn btn-primary" data-act="new-yes">Yes</button>
+          <button class="btn btn-outline" data-act="new-no">No</button>
+        </div>
+        <div class="foot"><button class="link-back" data-back="mechanics">Back</button><span class="mono">Step 3</span></div>
+      </div>
+
+      <!-- Screen B-result: new car note -->
+      <div class="screen" data-screen="newcar-note">
+        <div class="q">We stick to used cars.</div>
+        <div class="note"><b>New cars lose value fast.</b> Our whole list is used, because that is where reliability meets a sensible price. If you still want new, a franchised dealer is your move. Otherwise, let us match a used one to your budget.</div>
+        <div class="choices">
+          <button class="btn btn-primary" data-act="new-to-finance">Match me a used car</button>
+          <button class="btn btn-ghost" data-act="goto-catalog">Just show the list</button>
+        </div>
+        <div class="foot"><button class="link-back" data-back="newcar">Back</button><span class="mono">Step 3</span></div>
+      </div>
+
+      <!-- Screen C: finance + preference -->
+      <div class="screen" data-screen="finance-cap">
+        <div class="q">Let us match your budget.</div>
+        <div class="field input-money">
+          <label for="cap-budget">How much can you spend per month?</label>
+          <div class="input-money"><span>$</span><input class="input" id="cap-budget" type="number" min="0" step="10" placeholder="350" /></div>
+        </div>
+        <div class="field">
+          <label>What type of vehicle are you after?</label>
+          <div class="toggle-group" id="cap-style">
+            <button class="toggle" data-style="daily"><span class="tick"></span><span><span class="t-title">A reliable, efficient daily commuter</span><span class="t-desc">Uncomplicated. Gets in, starts, costs little to run.</span></span></button>
+            <button class="toggle" data-style="enthusiast"><span class="tick"></span><span><span class="t-title">An enthusiast car I can work on</span><span class="t-desc">A project with a big aftermarket and parts scene.</span></span></button>
+          </div>
+        </div>
+        <div class="choices">
+          <button class="btn btn-primary" data-act="cap-submit">See my matches</button>
+        </div>
+        <div class="foot"><button class="link-back" data-back="newcar">Back</button><span class="mono">Step 3</span></div>
+      </div>
+
+      <!-- Screen C-result: matches -->
+      <div class="screen" data-screen="matches">
+        <div class="q" id="matches-title">Your matches</div>
+        <div class="sub" id="matches-sub"></div>
+        <div class="matches-out" id="matches-list"></div>
+        <div class="choices">
+          <button class="btn btn-primary" data-act="goto-catalog">See them in the catalog</button>
+          <button class="btn btn-ghost" data-act="cap-again">Change budget</button>
+        </div>
+        <div class="foot"><button class="link-back" data-back="finance-cap">Back</button><span class="mono">Result</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div id="hero-sentinel" style="height:1px;"></div>
+
+<!-- ============ CATALOG ============ -->
+<section class="section" id="catalog">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="mono" style="margin-bottom:14px;">The list · 15 cars</div>
+      <h2>Trusted used cars</h2>
+      <p>Every car here earns its spot the same way: proven mechanicals, parts you can find anywhere, and a reputation for running long past the odometer numbers that scare people. Ratings are out of 5.</p>
+    </div>
+    <div class="catalog" id="catalog-grid"></div>
+  </div>
+</section>
+
+<!-- ============ FINANCE ============ -->
+<section class="section" id="finance" style="background:var(--surface-2); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="mono" style="margin-bottom:14px;">Run the numbers</div>
+      <h2>Finance</h2>
+      <p>Estimate a monthly payment on any car in the list, or tell us your monthly budget and we will surface what fits.</p>
+    </div>
+
+    <div class="finance-grid">
+      <!-- Feature A: calculator -->
+      <div class="fin-card reveal">
+        <h3>Estimate a payment</h3>
+        <p>Pick a car, adjust the terms, see the monthly cost.</p>
+
+        <div class="field">
+          <label for="calc-car">Car</label>
+          <select class="input" id="calc-car"></select>
+        </div>
+        <div class="field input-money">
+          <label for="calc-price">Vehicle price</label>
+          <div class="input-money"><span>$</span><input class="input" id="calc-price" type="number" min="0" step="100" /></div>
+          <span class="hint">Prefilled with an estimated used price. Adjust to a real listing.</span>
+        </div>
+        <div class="row2">
+          <div class="field input-money">
+            <label for="calc-down">Down payment</label>
+            <div class="input-money"><span>$</span><input class="input" id="calc-down" type="number" min="0" step="100" value="2000" /></div>
+          </div>
+          <div class="field">
+            <label for="calc-apr">Interest rate (APR)</label>
+            <input class="input" id="calc-apr" type="number" min="0" step="0.1" value="8.5" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="calc-term">Term length</label>
+          <select class="input" id="calc-term">
+            <option value="24">24 months</option>
+            <option value="36">36 months</option>
+            <option value="48">48 months</option>
+            <option value="60" selected>60 months</option>
+            <option value="72">72 months</option>
+          </select>
+        </div>
+
+        <div class="result">
+          <div class="big" id="calc-monthly">$0<small>/mo</small></div>
+          <div class="side">
+            <div>Total interest <b id="calc-interest">$0</b></div>
+            <div>Total cost <b id="calc-total">$0</b></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Feature B: budget matcher -->
+      <div class="fin-card reveal">
+        <h3>Match my budget</h3>
+        <p>Give us a monthly ceiling and a style. We assume 10% down, 7.9% APR, 60 months.</p>
+
+        <div class="field input-money">
+          <label for="match-budget">Max per month</label>
+          <div class="input-money"><span>$</span><input class="input" id="match-budget" type="number" min="0" step="10" placeholder="350" /></div>
+        </div>
+        <div class="field">
+          <label>Vehicle style</label>
+          <div class="toggle-group" id="match-style">
+            <button class="toggle" data-style="daily"><span class="tick"></span><span><span class="t-title">Daily commuter</span><span class="t-desc">Efficient, low maintenance, uncomplicated.</span></span></button>
+            <button class="toggle" data-style="enthusiast"><span class="tick"></span><span><span class="t-title">Enthusiast / project</span><span class="t-desc">Strong tuning and aftermarket community.</span></span></button>
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:20px; width:100%;" id="match-run">Find matches</button>
+
+        <div class="matches-out" id="match-out"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-row">
+    <div class="brand"><span class="dot"></span>AutoLens</div>
+    <div class="mono">Prototype · Estimates only, not financial advice</div>
+    <button class="btn btn-ghost" id="start-over">Start over</button>
+  </div>
+</footer>
+
+<script>
+/* =====================================================================
+   DATA — the 15 trusted cars
+   price: estimated used price in USD (edit freely)
+   tags:  'daily' and/or 'enthusiast' (drives the budget matcher)
+   ratings: out of 5
+   ===================================================================== */
+const CARS = [
+  { id:'corolla', name:'Toyota Corolla', years:'2008–2013', body:'Compact sedan', price:9500, tags:['daily'],
+    about:"The default answer when reliability matters more than anything else. The 1.8L engine is close to unkillable, and every mechanic alive knows how to fix one.",
+    review:"Boring in the best possible way. It just keeps going.",
+    ratings:{ Reliability:4.9, Value:4.7, Comfort:3.6, Drive:3.2 } },
+
+  { id:'camry', name:'Toyota Camry', years:'2007 · 2014 · 2020', body:'Midsize sedan', price:13500, tags:['daily'],
+    about:"A bigger, quieter Corolla with real road presence. The 2.5L four returns strong economy; the optional V6 adds pace without hurting dependability.",
+    review:"The car you buy once you are done taking risks.",
+    ratings:{ Reliability:4.8, Value:4.5, Comfort:4.2, Drive:3.4 } },
+
+  { id:'accord', name:'Honda Accord', years:'2012 · 2017 · 2019', body:'Midsize sedan', price:16000, tags:['daily','enthusiast'],
+    about:"Sharper to drive than the Camry, with a cabin that punches above its price. A huge owner base keeps parts and know-how easy to find.",
+    review:"Proof a sensible sedan can still be fun.",
+    ratings:{ Reliability:4.6, Value:4.4, Comfort:4.3, Drive:4.0 } },
+
+  { id:'rx350', name:'Lexus RX 350', years:'2010 · 2016', body:'Luxury SUV', price:17500, tags:['daily'],
+    about:"Highlander mechanicals wrapped in a hushed, well built cabin. Smooth V6, soft ride, and running costs closer to a Toyota than a German rival.",
+    review:"Luxury that does not punish you at the workshop.",
+    ratings:{ Reliability:4.7, Value:4.2, Comfort:4.6, Drive:3.6 } },
+
+  { id:'highlander', name:'Toyota Highlander', years:'2003 · 2016', body:'3-row SUV', price:16500, tags:['daily'],
+    about:"A three row family SUV on proven Toyota V6 hardware. Roomy, unstressed, and cheap to keep on the road for a decade.",
+    review:"The family hauler that outlasts the family.",
+    ratings:{ Reliability:4.8, Value:4.4, Comfort:4.3, Drive:3.5 } },
+
+  { id:'sienna', name:'Toyota Sienna', years:'2006 · 2017', body:'Minivan', price:16000, tags:['daily'],
+    about:"The most sensible way to move seven people. The optional all wheel drive is rare among minivans and genuinely useful on rough roads.",
+    review:"Uncool, and unbeatable at its job.",
+    ratings:{ Reliability:4.7, Value:4.3, Comfort:4.5, Drive:3.2 } },
+
+  { id:'civic', name:'Honda Civic', years:'2006–2015', body:'Compact', price:10500, tags:['daily','enthusiast'],
+    about:"Light, efficient, and backed by one of the largest aftermarket scenes anywhere. Easy to own stock, endlessly modifiable as a project.",
+    review:"A blank canvas that still returns 40 mpg.",
+    ratings:{ Reliability:4.6, Value:4.6, Comfort:3.7, Drive:4.1 } },
+
+  { id:'eclass', name:'Mercedes-Benz E-Class', years:'2015', body:'Luxury sedan', price:17000, tags:['daily'],
+    about:"The comfort and road manners sit a clear step above the rest of this list. The trade is pricier parts and specialist labour to keep it right.",
+    review:"Buy the best example you can find, then maintain it properly.",
+    ratings:{ Reliability:3.8, Value:3.9, Comfort:4.7, Drive:4.2 } },
+
+  { id:'rav4', name:'Toyota RAV4', years:'2009 · 2017', body:'Compact SUV', price:15500, tags:['daily'],
+    about:"A right sized crossover that drives like a car and carries like a small SUV. The 2009 V6 is quietly quick; the 2017 trades pace for economy.",
+    review:"The sensible crossover that refuses to break.",
+    ratings:{ Reliability:4.7, Value:4.4, Comfort:4.0, Drive:3.6 } },
+
+  { id:'es350', name:'Lexus ES 350', years:'2007–2016', body:'Luxury sedan', price:14000, tags:['daily'],
+    about:"A Camry V6 in a tailored suit. Serene, hushed, and about as dependable as a luxury sedan gets.",
+    review:"Quiet money. Nothing shouts, everything lasts.",
+    ratings:{ Reliability:4.8, Value:4.5, Comfort:4.6, Drive:3.3 } },
+
+  { id:'prado', name:'Toyota Prado', years:'2010–2018', body:'Body-on-frame SUV', price:28000, tags:['daily'],
+    about:"A genuine off roader that shrugs off terrible roads and holds value hard, especially across West Africa. A strong base for an overland build.",
+    review:"Pays you back the day you sell it.",
+    ratings:{ Reliability:4.7, Value:4.0, Comfort:4.1, Drive:3.4 } },
+
+  { id:'gx460', name:'Lexus GX 460', years:'2010–2017', body:'Luxury 4x4', price:27000, tags:['daily'],
+    about:"Land Cruiser Prado underneath, Lexus refinement on top. A luxury SUV you can take off pavement without a second thought.",
+    review:"A 4x4 that ages like it was engineered to.",
+    ratings:{ Reliability:4.6, Value:4.1, Comfort:4.4, Drive:3.3 } },
+
+  { id:'venza', name:'Toyota Venza', years:'2009–2015', body:'Crossover', price:13000, tags:['daily'],
+    about:"A Camry underneath with a taller, wagon like body. Comfortable, practical, and overlooked, which keeps prices reasonable.",
+    review:"The smart contrarian pick.",
+    ratings:{ Reliability:4.6, Value:4.3, Comfort:4.2, Drive:3.4 } },
+
+  { id:'avalon', name:'Toyota Avalon', years:'2013', body:'Full-size sedan', price:14500, tags:['daily'],
+    about:"Toyota's big sedan: limousine legroom and ride quality on Camry running gear. A lot of comfortable car for the money.",
+    review:"First class legroom, economy class upkeep.",
+    ratings:{ Reliability:4.7, Value:4.3, Comfort:4.6, Drive:3.4 } },
+
+  { id:'crv', name:'Honda CR-V', years:'2012–2016', body:'Compact SUV', price:14000, tags:['daily','enthusiast'],
+    about:"Space efficient, frugal, and simple to service. A strong daily that also carries a surprisingly active owner and mod community.",
+    review:"The crossover that never overreaches.",
+    ratings:{ Reliability:4.6, Value:4.5, Comfort:4.0, Drive:3.5 } },
+];
+
+/* =====================================================================
+   money — currency + loan math
+   ===================================================================== */
+const money = {
+  fmt(n){ return '$' + Math.round(n).toLocaleString('en-US'); },
+  // standard amortized monthly payment
+  monthly(principal, apr, months){
+    if (principal <= 0) return 0;
+    const r = (apr / 100) / 12;
+    if (r === 0) return principal / months;
+    const f = Math.pow(1 + r, months);
+    return principal * r * f / (f - 1);
+  }
+};
+
+/* =====================================================================
+   reveal — scroll-in animation
+   ===================================================================== */
+(function reveal(){
+  const els = document.querySelectorAll('.reveal');
+  if (!('IntersectionObserver' in window)) { els.forEach(e => e.classList.add('in')); return; }
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  els.forEach(e => io.observe(e));
+})();
+
+/* =====================================================================
+   header — tuck the nav away once the hero is scrolled past
+   ===================================================================== */
+(function header(){
+  const bar = document.getElementById('site-header');
+  const sentinel = document.getElementById('hero-sentinel');
+  if (!('IntersectionObserver' in window)) return;
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => { bar.classList.toggle('tucked', !e.isIntersecting); });
+  }, { rootMargin: '-64px 0px 0px 0px' });
+  io.observe(sentinel);
+})();
+
+/* =====================================================================
+   car glyph — reusable side-profile silhouette for placeholders
+   ===================================================================== */
+function carGlyph(){
+  return '<svg viewBox="0 0 120 48" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    + '<path d="M6 34h108M14 34c0-4 3-7 7-7s7 3 7 7M92 34c0-4 3-7 7-7s7 3 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+    + '<path d="M10 34l4-13c1-3 3-4 6-4h42l18 10 22 3c4 1 6 3 6 7" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>'
+    + '<path d="M30 17v10M50 17v10" stroke="currentColor" stroke-width="2"/>'
+    + '</svg>';
+}
+
+/* =====================================================================
+   catalog — render the grid
+   ===================================================================== */
+function ratingBlock(ratings){
+  return Object.entries(ratings).map(([label, val]) => {
+    const pct = (val / 5) * 100;
+    return '<div class="rating"><div class="r-top"><span class="r-label">' + label + '</span><span class="r-val">' + val.toFixed(1) + '</span></div>'
+      + '<div class="bar"><i style="width:' + pct + '%"></i></div></div>';
+  }).join('');
+}
+
+function cardHTML(car, featured){
+  const visual = '<div class="car-visual">'
+    + '<span class="badge">' + car.body + '</span>'
+    + (car.image ? '<img src="' + car.image + '" alt="' + car.name + '">' : carGlyph())
+    + '<span class="years">' + car.years + '</span></div>';
+
+  const body = '<div class="card-body">'
+    + '<h3>' + car.name + '</h3>'
+    + '<p class="about">' + car.about + '</p>'
+    + '<p class="review">' + car.review + '</p>'
+    + '<div class="ratings">' + ratingBlock(car.ratings) + '</div>'
+    + '<div class="price"><span class="p-cap">Est. used price</span><span class="p-num">' + money.fmt(car.price) + '</span></div>'
+    + '</div>';
+
+  if (featured){
+    return '<article class="card featured reveal" id="car-' + car.id + '"><div class="card-inner">' + visual + body + '</div></article>';
+  }
+  return '<article class="card reveal" id="car-' + car.id + '">' + visual + body + '</article>';
+}
+
+(function renderCatalog(){
+  const grid = document.getElementById('catalog-grid');
+  grid.innerHTML = CARS.map((c, i) => cardHTML(c, i === 0)).join('');
+  // re-observe freshly added reveal cards
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.08 });
+  grid.querySelectorAll('.reveal').forEach(e => io.observe(e));
+})();
+
+/* =====================================================================
+   calculator — Feature A
+   ===================================================================== */
+(function calculator(){
+  const sel = document.getElementById('calc-car');
+  const price = document.getElementById('calc-price');
+  const down = document.getElementById('calc-down');
+  const apr = document.getElementById('calc-apr');
+  const term = document.getElementById('calc-term');
+  const outM = document.getElementById('calc-monthly');
+  const outI = document.getElementById('calc-interest');
+  const outT = document.getElementById('calc-total');
+
+  sel.innerHTML = CARS.map(c => '<option value="' + c.id + '">' + c.name + ' (' + c.years + ')</option>').join('');
+
+  function syncPrice(){ const car = CARS.find(c => c.id === sel.value); price.value = car ? car.price : 0; recalc(); }
+  function recalc(){
+    const principal = Math.max(0, (+price.value || 0) - (+down.value || 0));
+    const months = +term.value;
+    const m = money.monthly(principal, +apr.value || 0, months);
+    const total = m * months + (+down.value || 0);
+    const interest = (m * months) - principal;
+    outM.innerHTML = money.fmt(m) + '<small>/mo</small>';
+    outI.textContent = money.fmt(Math.max(0, interest));
+    outT.textContent = money.fmt(total);
+  }
+
+  sel.addEventListener('change', syncPrice);
+  [price, down, apr, term].forEach(el => el.addEventListener('input', recalc));
+  syncPrice();
+})();
+
+/* =====================================================================
+   matcher — Feature B (shared logic for finance section + interview)
+   assumptions: 10% down, 7.9% APR, 60 months
+   ===================================================================== */
+function findMatches(maxMonthly, style){
+  const APR = 7.9, TERM = 60, DOWN = 0.10;
+  return CARS
+    .filter(c => c.tags.includes(style))
+    .map(c => ({ car: c, pay: money.monthly(c.price * (1 - DOWN), APR, TERM) }))
+    .filter(x => !maxMonthly || x.pay <= maxMonthly)
+    .sort((a, b) => a.pay - b.pay);
+}
+
+function highlightMatches(ids){
+  document.querySelectorAll('.card.matched').forEach(c => c.classList.remove('matched'));
+  ids.forEach(id => { const el = document.getElementById('car-' + id); if (el) el.classList.add('matched'); });
+}
+
+/* finance-section matcher UI */
+(function matcherUI(){
+  const budget = document.getElementById('match-budget');
+  const styleWrap = document.getElementById('match-style');
+  const run = document.getElementById('match-run');
+  const out = document.getElementById('match-out');
+  let style = null;
+
+  styleWrap.querySelectorAll('.toggle').forEach(t => t.addEventListener('click', () => {
+    styleWrap.querySelectorAll('.toggle').forEach(x => x.classList.remove('sel'));
+    t.classList.add('sel'); style = t.dataset.style;
+  }));
+
+  run.addEventListener('click', () => {
+    if (!style){ out.innerHTML = '<div class="empty">Pick a vehicle style first.</div>'; return; }
+    const max = +budget.value || 0;
+    const matches = findMatches(max, style);
+    if (!matches.length){
+      out.innerHTML = '<div class="empty">Nothing fits that monthly target yet. Try raising it, or switch the vehicle style.</div>';
+      highlightMatches([]);
+      return;
+    }
+    out.innerHTML = matches.map(m =>
+      '<div class="mini-match"><div><div class="mm-name">' + m.car.name + '</div><div class="mm-years">' + m.car.years + '</div></div>'
+      + '<div class="mm-pay">' + money.fmt(m.pay) + '/mo</div></div>'
+    ).join('');
+    highlightMatches(matches.map(m => m.car.id));
+  });
+})();
+
+/* =====================================================================
+   flow — the hero discovery / interview state machine
+   ===================================================================== */
+(function flow(){
+  const panel = document.getElementById('panel');
+  const progress = document.getElementById('progress').children;
+  const screens = panel.querySelectorAll('.screen');
+  let capStyle = null;
+
+  // which progress dots light up per screen
+  const dots = {
+    intro:[0], mechanics:[0,1], 'mech-advice':[0,1], newcar:[0,1,2],
+    'newcar-note':[0,1,2], 'finance-cap':[0,1,2], matches:[0,1,2]
+  };
+
+  function show(name){
+    screens.forEach(s => s.classList.toggle('active', s.dataset.screen === name));
+    const on = dots[name] || [0];
+    Array.from(progress).forEach((d, i) => d.classList.toggle('on', on.includes(i)));
+  }
+
+  function toCatalog(){ document.getElementById('catalog').scrollIntoView({ behavior: 'smooth' }); }
+
+  function renderMatches(){
+    const max = +document.getElementById('cap-budget').value || 0;
+    const list = document.getElementById('matches-list');
+    const sub = document.getElementById('matches-sub');
+    const title = document.getElementById('matches-title');
+    const matches = findMatches(max, capStyle);
+    const styleLabel = capStyle === 'enthusiast' ? 'project cars' : 'daily commuters';
+
+    if (!matches.length){
+      title.textContent = 'No matches yet';
+      sub.textContent = '';
+      list.innerHTML = '<div class="empty">Nothing in the ' + styleLabel + ' group lands under ' + (max ? money.fmt(max) + '/mo' : 'that budget') + '. Raise the budget or switch style.</div>';
+      highlightMatches([]);
+      return;
+    }
+    title.textContent = 'Your matches';
+    sub.textContent = (max ? 'Under ' + money.fmt(max) + '/mo, ' : '') + 'ranked cheapest first.';
+    list.innerHTML = matches.slice(0, 5).map(m =>
+      '<div class="mini-match"><div><div class="mm-name">' + m.car.name + '</div><div class="mm-years">' + m.car.years + '</div></div>'
+      + '<div class="mm-pay">' + money.fmt(m.pay) + '/mo</div></div>'
+    ).join('');
+    highlightMatches(matches.map(m => m.car.id));
+  }
+
+  // action router
+  panel.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]');
+    const back = e.target.closest('[data-back]');
+    const styleBtn = e.target.closest('#cap-style .toggle');
+
+    if (styleBtn){
+      panel.querySelectorAll('#cap-style .toggle').forEach(x => x.classList.remove('sel'));
+      styleBtn.classList.add('sel'); capStyle = styleBtn.dataset.style; return;
+    }
+    if (back){ show(back.dataset.back); return; }
+    if (!act) return;
+
+    switch (act.dataset.act){
+      case 'intro-yes': toCatalog(); break;
+      case 'intro-no': show('mechanics'); break;
+      case 'mech-yes': show('mech-advice'); break;
+      case 'mech-no': show('newcar'); break;
+      case 'mech-submit': {
+        const note = document.getElementById('mech-note');
+        note.style.display = 'block';
+        note.innerHTML = '<b>This is the demo panel.</b> In the full app your description posts to the Mechanic Advisor, which asks a follow-up or two, then returns ranked likely causes with what to check yourself and what to tell a mechanic.';
+        break;
+      }
+      case 'new-yes': show('newcar-note'); break;
+      case 'new-no': show('finance-cap'); break;
+      case 'new-to-finance': show('finance-cap'); break;
+      case 'cap-submit':
+        if (!capStyle){ /* nudge */ panel.querySelector('#cap-style').style.outline = '2px solid var(--accent)'; setTimeout(()=>panel.querySelector('#cap-style').style.outline='', 900); break; }
+        renderMatches(); show('matches'); break;
+      case 'cap-again': show('finance-cap'); break;
+      case 'goto-catalog': toCatalog(); break;
+    }
+  });
+
+  // start over resets the panel
+  document.getElementById('start-over').addEventListener('click', () => {
+    capStyle = null;
+    panel.querySelectorAll('#cap-style .toggle').forEach(x => x.classList.remove('sel'));
+    document.getElementById('cap-budget').value = '';
+    document.getElementById('mech-note').style.display = 'none';
+    highlightMatches([]);
+    show('intro');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  show('intro');
+})();
+</script>
+</body>
+</html>
